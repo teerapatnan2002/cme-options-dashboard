@@ -259,13 +259,9 @@ if data:
             remaining = info['cutoff'] - now
             hours_left = remaining.total_seconds() / 3600
             if hours_left < 24:
-                st.sidebar.warning(f"⏳ Series นี้จะหมดอายุใน **{hours_left:.1f} ชม.**
-
-🕐 Cutoff: {cutoff_str} ({dst_label})")
+                st.sidebar.warning(f"⏳ Series นี้จะหมดอายุใน **{hours_left:.1f} ชม.**🕐 Cutoff: {cutoff_str} ({dst_label})")
             else:
-                st.sidebar.success(f"🟢 **Series Active**
-
-🕐 Cutoff: {cutoff_str} ({dst_label})")
+                st.sidebar.success(f"🟢 **Series Active**🕐 Cutoff: {cutoff_str} ({dst_label})")
         else:
             st.sidebar.error(f"🔴 **Series หมดอายุแล้ว**
 
