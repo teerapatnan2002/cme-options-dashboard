@@ -9,6 +9,7 @@ from scipy.stats import norm
 import subprocess
 import os
 import time
+import sys
 
 # ⚙️ ตั้งค่าหน้าเว็บ
 st.set_page_config(page_title="CME Quant Dashboard", layout="wide")
@@ -164,7 +165,7 @@ if data:
             try:
                 with st.spinner("🤖 กำลังสั่ง Bot ดึงข้อมูล... (อาจใช้เวลา 1-2 นาที)"):
                     process = subprocess.Popen(
-                        ["python", "cme_bot.py"],
+
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
