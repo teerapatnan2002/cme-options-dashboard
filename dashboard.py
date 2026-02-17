@@ -263,9 +263,7 @@ if data:
             else:
                 st.sidebar.success(f"🟢 **Series Active**🕐 Cutoff: {cutoff_str} ({dst_label})")
         else:
-            st.sidebar.error(f"🔴 **Series หมดอายุแล้ว**
-
-🕐 Cutoff: {cutoff_str} ({dst_label})")
+            st.sidebar.error(f"🔴 **Series หมดอายุแล้ว** 🕐 Cutoff: {cutoff_str} ({dst_label})")
     
     available_times = list(data[selected_date][selected_series].keys())
     oi_times = [t for t in available_times if t.endswith("_OI")]
@@ -304,11 +302,7 @@ if data:
 
         st.sidebar.markdown("---")
         st.sidebar.markdown("**⚙️ สภาวะตลาด (Parameters)**")
-        st.sidebar.info(f"💵 ราคาปัจจุบัน: **{current_price}**
-
-⏳ วันหมดอายุ: **{dte} วัน**
-
-📈 ความผันผวน: **{iv:.4f}**")
+        st.sidebar.info(f"💵 ราคาปัจจุบัน: **{current_price}** ⏳ วันหมดอายุ: **{dte} วัน** 📈 ความผันผวน: **{iv:.4f}**")
 
         if not df_call.empty and not df_put.empty:
             
