@@ -185,7 +185,7 @@ if data:
                 with st.spinner("🤖 กำลังสั่ง Bot ดึงข้อมูล... (อาจใช้เวลา 1-2 นาที)"):
                     # Run bot script
                     process = subprocess.Popen(
-                        [sys.executable, "cme_bot.py"],
+                        [sys.executable, "cme_bot.py"], # fix
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
