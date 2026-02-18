@@ -170,12 +170,19 @@ if data:
     for s in available_series:
         try:
             first_time_key = list(data[selected_date][s].keys())[0]
-            dte = data[selected_date][s][first_time_key].get('dte', 0)
+            entry = data[selected_date][s][first_time_key]
+            dte = entry.get('dte', 0)
             
-            selected_dt = datetime.strptime(selected_date, "%Y-%m-%d")
-            expiration_dt = selected_dt + timedelta(days=dte)
-            exp_date = expiration_dt
-            exp_str = expiration_dt.strftime("%d %b %Y")
+            # 🔑 ใช้ exp_date_str จาก CME (ถ้ามี) แทนการคำนวณจาก DTE
+            exp_date_str_from_firebase = entry.get('exp_date_str', None)
+            if exp_date_str_from_firebase:
+                exp_date = datetime.strptime(exp_date_str_from_firebase, "%d %b %Y")
+                exp_str = exp_date.strftime("%d %b %Y")
+            else:
+                # Fallback สำหรับข้อมูลเก่าที่ยังไม่มี exp_date_str
+                selected_dt = datetime.strptime(selected_date, "%Y-%m-%d")
+                exp_date = selected_dt + timedelta(days=round(dte))
+                exp_str = exp_date.strftime("%d %b %Y")
             
             active = is_series_active(exp_date, now)
             cutoff = get_expiration_datetime_thai(exp_date)
