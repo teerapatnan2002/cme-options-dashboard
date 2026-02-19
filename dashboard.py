@@ -112,7 +112,6 @@ def get_ai_analysis(current_price, max_pain, gex_df, dte, series_name, vol_call_
     * ทำหน้าที่เป็น 'Senior Quantitative Market Maker & Volatility Strategist' โดยยึดปรัชญา 'Risk is measured, not guessed.'
     * วิเคราะห์ตลาดผ่านโครงสร้าง Liquidity, Gamma Exposure (GEX), และ Volatility Surface โดยใช้หลักการ Chain-of-Thought (CoT) จากระดับ Micro Structure ไปจนถึง Macro Strategy.
     * ผสานความเชี่ยวชาญในฐานะ 'นัก Finance Engineering', 'นัก Prompt Engineering' และ 'Market Maker' เพื่อวิเคราะห์และพัฒนาโครงสร้างคำสั่ง (Prompt) พร้อมทั้งต่อยอดข้อมูลเชิงลึกจากการตลาด
-    ... (Prompt content is preserved) ...
     =========================================
     📊 ข้อมูลอินพุตสำหรับวิเคราะห์รอบนี้ (Live Market Data):
     - Asset & Context: สัญญา {series_name}, DTE = {dte} วัน
@@ -311,38 +310,205 @@ if data:
                 st.plotly_chart(fig_pain, use_container_width=True)
 
             # ==========================================
-            # 4️⃣ กราฟ Volatility Skew (EOD)
+            # 4️⃣ กราฟ IV แยก Call/Put Side
             # ==========================================
             st.markdown("---")
-            st.subheader("📉 Volatility Skew (EOD)")
+            st.subheader("📉 Implied Volatility Analysis")
             
             eod_times = [t for t in available_times if t.endswith("_EOD")]
+            vol_df = pd.DataFrame()
+            
             if eod_times:
                 latest_eod = sorted(eod_times)[-1]
                 eod_raw = data[selected_date][selected_series][latest_eod]
                 
                 if eod_raw.get("points"):
                     eod_df = pd.DataFrame(eod_raw["points"])
-                    vol_df = eod_df[
-                        (eod_df["DataType"] == "Volatility") | 
-                        (eod_df["SeriesName"].str.contains("Vol", case=False)) |
-                        (eod_df["SeriesName"].str.contains("Settle", case=False))
-                    ]
+                    vol_df = eod_df[eod_df["DataType"] == "Volatility"].copy()
+                    vol_df = vol_df.sort_values("Strike").reset_index(drop=True)
                     
-                    if not vol_df.empty:
-                        st.markdown(f"กราฟยิ้ม (Smile) หรือแสยะยิ้ม (Smirk) บอกว่าตลาดกลัวฝั่งไหนมากกว่ากัน (ข้อมูลล่าสุด: {latest_eod})")
+                    if not vol_df.empty and current_price > 0:
+                        # แบ่ง Put-side (OTM Put = below ATM) vs Call-side (OTM Call = above ATM)
+                        vol_df["Side"] = vol_df["Strike"].apply(
+                            lambda k: "Put-side" if k < current_price else "Call-side"
+                        )
                         
-                        fig_vol = px.line(vol_df, x="Strike", y="Value", markers=True)
-                        if current_price > 0: fig_vol.add_vline(x=current_price, line_dash="dot", line_color="white", annotation_text="Spot")
+                        put_side = vol_df[vol_df["Strike"] < current_price]
+                        call_side = vol_df[vol_df["Strike"] >= current_price]
                         
-                        fig_vol.update_layout(xaxis_title="Strike Price", yaxis_title="Implied Volatility (%)", hovermode="x unified", height=400)
-                        st.plotly_chart(fig_vol, use_container_width=True)
+                        avg_put_iv = put_side["Value"].mean() * 100 if not put_side.empty else 0
+                        avg_call_iv = call_side["Value"].mean() * 100 if not call_side.empty else 0
+                        atm_iv = vol_df.iloc[(vol_df["Strike"] - current_price).abs().argsort().iloc[0]]["Value"] * 100
+                        skew_ratio = avg_put_iv / avg_call_iv if avg_call_iv > 0 else 0
+                        
+                        # 📊 Metric boxes
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("🎯 ATM IV", f"{atm_iv:.2f}%")
+                        m2.metric("🔴 Avg Put IV", f"{avg_put_iv:.2f}%")
+                        m3.metric("🟢 Avg Call IV", f"{avg_call_iv:.2f}%")
+                        skew_label = "Bearish Skew" if skew_ratio > 1.05 else ("Bullish Skew" if skew_ratio < 0.95 else "Balanced")
+                        m4.metric("⚖️ Put/Call Ratio", f"{skew_ratio:.3f}", delta=skew_label, delta_color="inverse" if skew_ratio > 1 else "normal")
+                        
+                        st.caption(f"ข้อมูลล่าสุด: {latest_eod} | Put/Call IV Ratio > 1 = ตลาดกลัวขาลง (Bearish Skew)")
+                        
+                        # 📈 กราฟ IV แยก Call/Put
+                        fig_iv = go.Figure()
+                        
+                        if not put_side.empty:
+                            fig_iv.add_trace(go.Scatter(
+                                x=put_side["Strike"], y=put_side["Value"] * 100,
+                                name="Put-side IV", mode="lines+markers",
+                                line=dict(color="#e74c3c", width=2),
+                                fill="tozeroy", fillcolor="rgba(231, 76, 60, 0.1)"
+                            ))
+                        if not call_side.empty:
+                            fig_iv.add_trace(go.Scatter(
+                                x=call_side["Strike"], y=call_side["Value"] * 100,
+                                name="Call-side IV", mode="lines+markers",
+                                line=dict(color="#2ecc71", width=2),
+                                fill="tozeroy", fillcolor="rgba(46, 204, 113, 0.1)"
+                            ))
+                        
+                        fig_iv.add_vline(x=current_price, line_dash="dot", line_color="white", annotation_text=f"ATM ({current_price})")
+                        fig_iv.add_hline(y=atm_iv, line_dash="dash", line_color="yellow", opacity=0.5, annotation_text=f"ATM IV: {atm_iv:.2f}%")
+                        
+                        fig_iv.update_layout(
+                            xaxis_title="Strike Price", yaxis_title="Implied Volatility (%)",
+                            hovermode="x unified", height=450, 
+                            legend=dict(orientation="h", y=1.1)
+                        )
+                        st.plotly_chart(fig_iv, use_container_width=True)
+                    elif not vol_df.empty:
+                        fig_vol_basic = px.line(vol_df, x="Strike", y="Value", markers=True)
+                        fig_vol_basic.update_layout(xaxis_title="Strike Price", yaxis_title="IV (%)", hovermode="x unified", height=400)
+                        st.plotly_chart(fig_vol_basic, use_container_width=True)
                     else:
-                        st.info(f"ℹ️ พบข้อมูล EOD ({latest_eod}) แต่ไม่พบค่า Volatility ในข้อมูล")
+                        st.info(f"ℹ️ พบข้อมูล EOD ({latest_eod}) แต่ไม่พบค่า Volatility")
                 else:
                     st.warning(f"⚠️ ข้อมูล EOD ({latest_eod}) ว่างเปล่า")
             else:
-                st.warning(f"⚠️ ไม่พบข้อมูล Volatility (EOD) สำหรับ {selected_series} ในวันนี้ (บอทอาจจะยังไม่ได้ดึง หรือดึงไม่สำเร็จ)")
+                st.warning(f"⚠️ ไม่พบข้อมูล Volatility (EOD) สำหรับ {selected_series} ในวันนี้")
+
+            # ==========================================
+            # 5️⃣ เปรียบเทียบ IV ข้ามวัน (Cross-Day)
+            # ==========================================
+            st.markdown("---")
+            st.subheader("📊 IV Cross-Day Comparison")
+            
+            all_dates_sorted = sorted(data.keys(), reverse=True)
+            
+            if len(all_dates_sorted) >= 2 and not vol_df.empty:
+                # หาวันก่อนหน้าที่มีข้อมูล
+                prev_vol_df = pd.DataFrame()
+                prev_date_used = None
+                prev_series_used = None
+                
+                for prev_date in all_dates_sorted:
+                    if prev_date == selected_date:
+                        continue
+                    
+                    # หา series เดียวกันหรือ series ที่คล้ายกันในวันก่อนหน้า
+                    if selected_series in data.get(prev_date, {}):
+                        prev_series_data = data[prev_date][selected_series]
+                        prev_series_used = selected_series
+                    else:
+                        # ลองหา series อื่นในวันนั้น
+                        available_prev = list(data.get(prev_date, {}).keys())
+                        if not available_prev:
+                            continue
+                        prev_series_data = data[prev_date][available_prev[0]]
+                        prev_series_used = available_prev[0]
+                    
+                    # หา EOD data ของวันก่อนหน้า
+                    prev_eod_times = [t for t in prev_series_data.keys() if t.endswith("_EOD")]
+                    if prev_eod_times:
+                        latest_prev_eod = sorted(prev_eod_times)[-1]
+                        prev_eod_raw = prev_series_data[latest_prev_eod]
+                        
+                        if prev_eod_raw.get("points"):
+                            prev_eod_df = pd.DataFrame(prev_eod_raw["points"])
+                            prev_vol_df = prev_eod_df[prev_eod_df["DataType"] == "Volatility"].copy()
+                            prev_vol_df = prev_vol_df.sort_values("Strike").reset_index(drop=True)
+                            prev_date_used = prev_date
+                            break
+                
+                if not prev_vol_df.empty and prev_date_used:
+                    st.caption(f"📅 เปรียบเทียบ: **{selected_date}** ({selected_series}) vs **{prev_date_used}** ({prev_series_used})")
+                    
+                    col_overlay, col_change = st.columns(2)
+                    
+                    with col_overlay:
+                        st.markdown("**🔀 IV Overlay (ซ้อนทับ)**")
+                        fig_compare = go.Figure()
+                        
+                        fig_compare.add_trace(go.Scatter(
+                            x=vol_df["Strike"], y=vol_df["Value"] * 100,
+                            name=f"{selected_date}", mode="lines+markers",
+                            line=dict(color="#f1c40f", width=3)
+                        ))
+                        fig_compare.add_trace(go.Scatter(
+                            x=prev_vol_df["Strike"], y=prev_vol_df["Value"] * 100,
+                            name=f"{prev_date_used}", mode="lines",
+                            line=dict(color="#95a5a6", width=2, dash="dash")
+                        ))
+                        
+                        if current_price > 0:
+                            fig_compare.add_vline(x=current_price, line_dash="dot", line_color="white", opacity=0.5)
+                        
+                        fig_compare.update_layout(
+                            xaxis_title="Strike Price", yaxis_title="IV (%)",
+                            hovermode="x unified", height=400,
+                            legend=dict(orientation="h", y=1.1)
+                        )
+                        st.plotly_chart(fig_compare, use_container_width=True)
+                    
+                    with col_change:
+                        st.markdown("**📈 IV Change (ส่วนต่าง)**")
+                        # Merge on Strike เพื่อคำนวณ IV Change
+                        merged = pd.merge(
+                            vol_df[["Strike", "Value"]].rename(columns={"Value": "IV_Today"}),
+                            prev_vol_df[["Strike", "Value"]].rename(columns={"Value": "IV_Prev"}),
+                            on="Strike", how="inner"
+                        )
+                        
+                        if not merged.empty:
+                            merged["IV_Change"] = (merged["IV_Today"] - merged["IV_Prev"]) * 100
+                            
+                            fig_change = go.Figure()
+                            colors = ["#2ecc71" if x >= 0 else "#e74c3c" for x in merged["IV_Change"]]
+                            
+                            fig_change.add_trace(go.Bar(
+                                x=merged["Strike"], y=merged["IV_Change"],
+                                marker_color=colors, name="IV Change"
+                            ))
+                            
+                            fig_change.add_hline(y=0, line_color="white", line_width=1)
+                            if current_price > 0:
+                                fig_change.add_vline(x=current_price, line_dash="dot", line_color="white", opacity=0.5)
+                            
+                            fig_change.update_layout(
+                                xaxis_title="Strike Price", yaxis_title="IV Change (pp)",
+                                hovermode="x unified", height=400
+                            )
+                            st.plotly_chart(fig_change, use_container_width=True)
+                            
+                            # สรุป IV Change
+                            avg_change = merged["IV_Change"].mean()
+                            max_increase = merged.loc[merged["IV_Change"].idxmax()]
+                            max_decrease = merged.loc[merged["IV_Change"].idxmin()]
+                            
+                            change_icon = "🔺" if avg_change > 0 else "🔻"
+                            st.caption(f"{change_icon} **Avg IV Change: {avg_change:+.3f}pp** | "
+                                      f"📈 Max increase: Strike {max_increase['Strike']:.0f} ({max_increase['IV_Change']:+.3f}pp) | "
+                                      f"📉 Max decrease: Strike {max_decrease['Strike']:.0f} ({max_decrease['IV_Change']:+.3f}pp)")
+                        else:
+                            st.info("⚠️ ไม่มี Strike ที่ตรงกันระหว่างสองวัน")
+                else:
+                    st.info("ℹ️ ไม่พบข้อมูล Volatility ของวันก่อนหน้าสำหรับเปรียบเทียบ")
+            elif vol_df.empty:
+                st.info("ℹ️ ไม่มีข้อมูล IV วันนี้สำหรับเปรียบเทียบ")
+            else:
+                st.info("ℹ️ ต้องมีข้อมูลอย่างน้อย 2 วันเพื่อเปรียบเทียบ")
 
             # ==========================================
             # 🤖 พื้นที่ให้ AI แสดงฝีมือ (UI)
