@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 # 🌟 URL ของ Firebase ของคุณ
 FIREBASE_URL_TEMPLATE = "https://cme-quant-bot-default-rtdb.asia-southeast1.firebasedatabase.app/daily_data/{date}/{contract}/{time}_{type}.json"
+FIREBASE_SECRET = "ZuouK687w4UjNxSwsuIqyWFIVVThRASVKXx3HoEW"
 
 # =========================================================
 # ⏰ Expiration Time Utilities (Thai Time / CME CT)
@@ -92,16 +93,37 @@ def get_highcharts_data(page):
         return null;
     }""")
 
-def push_to_firebase(data, data_type):
-    """ส่งข้อมูลขึ้น Cloud อัตโนมัติ"""
+def get_cme_trading_date():
+    """คำนวณ CME Trading Date จากเวลาไทย
+    CME Gold Options ปิดตลาด 12:30 PM CT = 01:30 AM Thai (Winter) / 00:30 AM Thai (Summer)
+    ถ้ารัน Bot หลังเที่ยงคืนแต่ก่อน cutoff → ยังเป็น trading day เดิม (ใช้วันก่อนหน้า)
+    """
     now = datetime.now()
-    date_str = now.strftime("%Y-%m-%d")
+    # ถ้าเป็นช่วง DST (Summer): cutoff = 00:30
+    # ถ้าเป็นช่วง Winter: cutoff = 01:30
+    cutoff_hour = 0 if is_us_dst(now) else 1
+    cutoff_minute = 30
+    
+    if now.hour < cutoff_hour or (now.hour == cutoff_hour and now.minute < cutoff_minute):
+        # ยังเป็น trading day ของเมื่อวาน
+        trading_date = now - timedelta(days=1)
+        print(f"📅 [Trading Date] เวลาไทย {now.strftime('%H:%M')} → ยังเป็น CME session ของวันที่ {trading_date.strftime('%Y-%m-%d')}")
+    else:
+        trading_date = now
+    
+    return trading_date
+
+def push_to_firebase(data, data_type):
+    """ส่งข้อมูลขึ้น Cloud อัตโนมัติ (ใช้ CME Trading Date)"""
+    now = datetime.now()
+    trading_date = get_cme_trading_date()
+    date_str = trading_date.strftime("%Y-%m-%d")
     time_str = now.strftime("%H-%M-%S")
     
     url = FIREBASE_URL_TEMPLATE.format(date=date_str, contract=data['contract'], time=time_str, type=data_type)
     
     try:
-        response = requests.put(url, json=data)
+        response = requests.put(f"{url}?auth={FIREBASE_SECRET}", json=data)
         if response.status_code == 200:
             print(f"✅ อัปโหลด {data['contract']} [{data_type}] ขึ้น Firebase สำเร็จ! ({time_str})")
         else:
@@ -112,8 +134,10 @@ def push_to_firebase(data, data_type):
 # =========================================================
 # 📦 ฟังก์ชันเดิม: เหมาจบ ดึง Intraday + OI
 # =========================================================
-def process_current_series(page, series_type_name):
+def process_current_series(page, series_type_name, exp_date_str=None):
     print(f"\n--- 🚀 เริ่มดูดข้อมูลชุด: {series_type_name} ---")
+    if exp_date_str:
+        print(f"📅 Expiration Date (from CME): {exp_date_str}")
     
     # 1. รอ Intraday
     print(f"📥 [{series_type_name}] กำลังรอข้อมูล Intraday... (จะไม่ไปต่อจนกว่าจะเจอ)")
@@ -124,6 +148,8 @@ def process_current_series(page, series_type_name):
         intraday_data = get_highcharts_data(page)
         if intraday_data:
             print(f"✅ [{series_type_name}] เจอข้อมูล Intraday แล้ว! (รอบที่ {attempt})")
+            if exp_date_str:
+                intraday_data['exp_date_str'] = exp_date_str
             push_to_firebase(intraday_data, "Intraday")
             break
         else:
@@ -194,6 +220,8 @@ def process_current_series(page, series_type_name):
             
              if is_oi:
                 print(f"✅ [{series_type_name}] เจอข้อมูล OI แล้ว! (รอบที่ {attempt})")
+                if exp_date_str:
+                    raw_data['exp_date_str'] = exp_date_str
                 push_to_firebase(raw_data, "OI")
                 oi_data = raw_data # เก็บไว้ return
                 break
@@ -232,7 +260,9 @@ def process_current_series(page, series_type_name):
             eod_data = get_highcharts_data(page)
             
             # โยนขึ้น Firebase พร้อมตั้งชื่อ Type ว่า 'EOD'
-            if eod_data: 
+            if eod_data:
+                if exp_date_str:
+                    eod_data['exp_date_str'] = exp_date_str
                 push_to_firebase(eod_data, "EOD")
             else:
                 print(f"⚠️ [{series_type_name}] ไม่ได้ข้อมูล EOD (get_highcharts_data return None)")
@@ -257,13 +287,16 @@ def process_current_series(page, series_type_name):
 # 🧠 ฟังก์ชันฉลาด: เลือก Series รองที่ใกล้วันนี้ที่สุด
 # (ใช้เวลาหมดอายุจริง ~ตี 1:30 Thai / 00:30 ช่วง DST)
 # =========================================================
-def select_best_secondary_series(page, current_main_series_code="OGJ6"):
+def select_best_secondary_series(page, current_main_series_code=None):
     print("\n🔍 กำลังค้นหา Series รองที่เหมาะสมที่สุด...")
+    if current_main_series_code:
+        print(f"📌 Series หลักที่จะไม่เลือกซ้ำ: {current_main_series_code}")
     
     options = page.locator(".link-selector ul.nav li a").all()
     
     candidates = []
     now = datetime.now()
+    MIN_HOURS_REMAINING = 6  # ข้ามซีรีส์ที่จะหมดอายุใน 6 ชม.
     
     dst_status = "CDT (Summer)" if is_us_dst(now) else "CST (Winter)"
     print(f"📅 เวลาไทยตอนนี้: {now.strftime('%d %b %Y %H:%M:%S')} | US Timezone: {dst_status}")
@@ -286,13 +319,19 @@ def select_best_secondary_series(page, current_main_series_code="OGJ6"):
                     print(f"  {status_icon} {code} | Exp: {date_str} | Cutoff Thai: {expiry_thai.strftime('%d %b %H:%M')} | {'ACTIVE' if active else 'EXPIRED'}")
                     
                     # เอาเฉพาะ series ที่ยังไม่หมดอายุ และไม่ใช่ตัวหลัก
+                    # + ต้องเหลือเวลาอีกอย่างน้อย MIN_HOURS_REMAINING ชม.
                     if active and code != current_main_series_code:
-                        candidates.append({
-                            'code': code,
-                            'date': exp_date,
-                            'expiry_thai': expiry_thai,
-                            'element': opt
-                        })
+                        hours_left = (expiry_thai - now).total_seconds() / 3600
+                        if hours_left >= MIN_HOURS_REMAINING:
+                            candidates.append({
+                                'code': code,
+                                'date': exp_date,
+                                'expiry_thai': expiry_thai,
+                                'hours_left': hours_left,
+                                'element': opt
+                            })
+                        else:
+                            print(f"    ⏩ ข้าม {code} — เหลือแค่ {hours_left:.1f} ชม. (ต้อง >= {MIN_HOURS_REMAINING})")
                 except ValueError:
                     continue
         except:
@@ -302,32 +341,92 @@ def select_best_secondary_series(page, current_main_series_code="OGJ6"):
         # Sort by date ascending (ใกล้สุดก่อน)
         candidates.sort(key=lambda x: x['date'])
         best_choice = candidates[0]
+        exp_date_str = best_choice['date'].strftime('%d %b %Y')
         
-        print(f"🎯 เจอเป้าหมาย! Series รองที่ดีที่สุดคือ: {best_choice['code']} (Exp: {best_choice['date'].strftime('%d %b %Y')}, Cutoff: {best_choice['expiry_thai'].strftime('%d %b %H:%M')})")
+        print(f"🎯 เจอเป้าหมาย! Series รองที่ดีที่สุดคือ: {best_choice['code']} (Exp: {exp_date_str}, Cutoff: {best_choice['expiry_thai'].strftime('%d %b %H:%M')})")
         
         best_choice['element'].click(force=True)
-        return best_choice['code']
+        return best_choice['code'], exp_date_str
     else:
         print("⚠️ ไม่เจอ Series รองที่เหมาะสมเลย (ทุกตัวหมดอายุแล้ว หรือเหลือแค่ตัวหลัก)")
-        return None
+        return None, None
 
 
 def run_bot():
     print("🚀 เริ่มต้นเดินเครื่อง Bot ล่องหน...")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True) 
-        context = browser.new_context(viewport={'width': 1280, 'height': 800})
+        # Anti-Bot Evasion Arguments
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-infobars',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--ignore-certificate-errors'
+            ]
+        ) 
+        
+        # User Agent แบบเนียนๆ
+        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        
+        context = browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent=user_agent,
+            # เพิ่ม HTTP Header ให้ดูเหมือนคน
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1"
+            }
+        )
         page = context.new_page()
+        
+        # Mask WebDriver flag
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-        print("🌐 กำลังเข้าเว็บ CME...")
-        page.goto("https://cmegroup-tools.quikstrike.net//User/QuikStrikeView.aspx?pid=40&pf=6&viewitemid=IntegratedV2VExpectedRange&insid=209341331&qsid=baf9e29e-d0c4-4680-bac6-5b07eabe76b5")
+        print("🌐 กำลังขอ Session ID (QSID) ใหม่จาก QuikStrike...")
+        page.goto("https://cmegroup-tools.quikstrike.net/")
+        page.wait_for_load_state("domcontentloaded")
+        # รอให้ script สร้าง Session ขึ้นมาก่อน
+        time.sleep(3)
+        
+        import re
+        current_url = page.url
+        qsid = "096d5560-16ec-441e-8b2e-8e16925e8358" # ค่า fallback กันเหนียว
+        match = re.search(r"qsid=([^&]+)", current_url)
+        if match:
+            qsid = match.group(1)
+            print(f"✅ ได้รับ Session ID ใหม่สำเร็จ: {qsid}")
+        else:
+            print("⚠️ ไม่พบ Session ID ใหม่ (ใช้ค่า Fallback เดิมเผื่อฟลุค)")
+
+        # ประกอบ URL หุ่นยนต์แบบอัตโนมัติ 
+        target_url = f"https://cmegroup-tools.quikstrike.net//User/QuikStrikeView.aspx?pid=40&pf=6&viewitemid=IntegratedV2VExpectedRange&insid=211507502&qsid={qsid}"
+        print("🌐 กำลังเข้าเจาะทะลวงหน้า CME Options Dashboard (ES)...")
+        page.goto(target_url)
         
         page.wait_for_load_state("domcontentloaded")
         print("⏳ รอให้ UI และกราฟเตรียมตัว 8 วินาที...")
         time.sleep(8) 
 
+        # 🎯 ภารกิจที่ 0: อ่าน Expiration Date ของ series หลักจาก Dropdown
+        main_exp_date_str = None
+        try:
+            active_option = page.locator(".link-selector ul.nav li.active a").first
+            if active_option.is_visible():
+                lines = active_option.inner_text().strip().split('\n')
+                if len(lines) >= 2:
+                    main_exp_date_str = lines[1].strip()
+                    print(f"📅 Main Series Expiration: {main_exp_date_str}")
+        except:
+            print("⚠️ ไม่สามารถอ่าน Expiration Date ของ series หลักได้")
+
         # 🎯 ภารกิจที่ 1: ดึงซีรีส์หลัก
-        main_contract = process_current_series(page, "Main_Monthly")
+        main_contract = process_current_series(page, "Main_Monthly", exp_date_str=main_exp_date_str)
         print(f"📌 Main Contract detected: {main_contract}")
 
         # 🎯 ภารกิจที่ 2: เปลี่ยนซีรีส์แบบ Dynamic
@@ -336,7 +435,7 @@ def run_bot():
             page.locator("text='Expiration:' >> visible=true").first.click(force=True)
             time.sleep(2)
             
-            selected_code = select_best_secondary_series(page, current_main_series_code=main_contract)
+            selected_code, secondary_exp_date_str = select_best_secondary_series(page, current_main_series_code=main_contract)
             
             if selected_code:
                 print("⏳ รอให้กราฟซีรีส์รองโหลด 8 วินาที...")
@@ -351,7 +450,7 @@ def run_bot():
                 except:
                     pass
 
-                process_current_series(page, f"Secondary_{selected_code}")
+                process_current_series(page, f"Secondary_{selected_code}", exp_date_str=secondary_exp_date_str)
             else:
                 print("❌ ข้ามภารกิจที่ 2 เพราะเลือก Series ไม่ได้")
 
