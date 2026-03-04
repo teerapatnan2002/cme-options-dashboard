@@ -405,8 +405,8 @@ def run_bot():
             print("⚠️ ไม่พบ Session ID ใหม่ (ใช้ค่า Fallback เดิมเผื่อฟลุค)")
 
         # ประกอบ URL หุ่นยนต์แบบอัตโนมัติ 
-        target_url = f"https://cmegroup-tools.quikstrike.net//User/QuikStrikeView.aspx?pid=40&pf=6&viewitemid=IntegratedV2VExpectedRange&insid=211507502&qsid={qsid}"
-        print("🌐 กำลังเข้าเจาะทะลวงหน้า CME Options Dashboard (ES)...")
+        target_url = f"https://cmegroup-tools.quikstrike.net//User/QuikStrikeView.aspx?pid=40&pf=6&viewitemid=IntegratedV2VExpectedRange&insid=211776620&qsid={qsid}"
+        print("🌐 กำลังเข้าเจาะทะลวงหน้า CME Options Dashboard (Gold / GC)...")
         page.goto(target_url)
         
         page.wait_for_load_state("domcontentloaded")
